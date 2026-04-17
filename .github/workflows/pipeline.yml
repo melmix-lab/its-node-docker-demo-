@@ -1,0 +1,72 @@
+name: CI/CD - Docker Compose + MailHog
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16, 18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install dependencies
+        working-directory: ./app
+        run: npm install
+      - name: Run tests
+        working-directory: ./app
+        run: npm test --if-present
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+      - name: Build and push image
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/its-node-demo:latest .
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/its-node-demo:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stop old stack
+        run: docker compose down || true
+      - name: Start stack
+        run: docker compose up -d --build
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' its-node-demo 2>/dev/null || echo "starting")
+            echo "Health status: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Container is healthy!"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "ERRORE: container unhealthy"
+          exit 1
+      - name: Export container logs
+        if: always()
+        run: |
+          docker logs its-node-demo > container.log 2>&1 || true
+          docker logs mailhog > mailhog.log 2>&1 || true
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-logs
+          path: |
+            container.log
+            mailhog.log
