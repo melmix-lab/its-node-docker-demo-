@@ -41,7 +41,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Stop old stack
-        run: docker compose down || true
+        run: |
+          docker stop its-node-demo mailhog 2>/dev/null || true
+          docker rm its-node-demo mailhog 2>/dev/null || true
       - name: Start stack
         run: docker compose up -d --build
       - name: Wait for healthy
